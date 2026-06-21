@@ -26,8 +26,7 @@ manager:
   ## The chart automatically appends --operator-image matching manager.image.
   ##
   args:
-    - --leader-elect
-
+  - --leader-elect
   ## Image pull secrets
   ##
   # imagePullSecrets:
@@ -53,8 +52,8 @@ manager:
   ##
   resources:
     limits:
-      cpu: 500m
-      memory: 128Mi
+      cpu: 1
+      memory: 1Gi
     requests:
       cpu: 10m
       memory: 64Mi
@@ -90,7 +89,6 @@ manager:
   ## Termination grace period seconds
   ##
   terminationGracePeriodSeconds: 10
-
   ## Custom Deployment labels
   ##
   # labels: {}
@@ -126,7 +124,6 @@ rbac:
 serviceAccount:
   # Install default ServiceAccount provided
   enable: true
-
   ## Existing ServiceAccount name (only when enable=false)
   ## Note: When enable=true, respects nameOverride/fullnameOverride
   ##
@@ -140,8 +137,8 @@ serviceAccount:
   ##
   # labels: {}
 
-## Custom Resource Definitions
-##
+  ## Custom Resource Definitions
+  ##
 crd:
   # Install CRDs with the chart
   enable: true
@@ -177,4 +174,3 @@ webhook:
 ##
 prometheus:
   enable: false
-
