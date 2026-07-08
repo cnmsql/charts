@@ -57,4 +57,57 @@ webhooks:
     matchLabels:
       "kubernetes.io/metadata.name": {{ .Release.Namespace | quote }}
   {{- end }}
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "cnmsql.resourceName" (dict "suffix" "webhook-service" "context" $) }}
+      namespace: {{ .Release.Namespace }}
+      path: /validate-mysql-cnmsql-io-v1alpha1-databaseuser
+  failurePolicy: Fail
+  name: vdatabaseuser-v1alpha1.cnmsql.co
+  rules:
+  - apiGroups:
+    - mysql.cnmsql.co
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - databaseusers
+  sideEffects: None
+  {{- if .Values.rbac.namespaced }}
+  namespaceSelector:
+    matchLabels:
+      "kubernetes.io/metadata.name": {{ .Release.Namespace | quote }}
+  {{- end }}
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "cnmsql.resourceName" (dict "suffix" "webhook-service" "context" $) }}
+      namespace: {{ .Release.Namespace }}
+      path: /validate--v1-pod
+  failurePolicy: Fail
+  name: vinstancepod-v1alpha1.cnmsql.co
+  objectSelector:
+    matchExpressions:
+    - key: mysql.cnmsql.co/cluster
+      operator: Exists
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - UPDATE
+    resources:
+    - pods
+  sideEffects: None
+  {{- if .Values.rbac.namespaced }}
+  namespaceSelector:
+    matchLabels:
+      "kubernetes.io/metadata.name": {{ .Release.Namespace | quote }}
+  {{- end }}
 {{- end }}

@@ -5,7 +5,7 @@ metadata:
   name: {{ include "cnmsql.resourceName" (dict "suffix" "metrics-reader" "context" $) }}
 rules:
 - nonResourceURLs:
-  - /metrics
+  - "/metrics"
   verbs:
   - get
 {{- end }}

@@ -99,8 +99,11 @@ rules:
   - backups
   verbs:
   - create
+  - delete
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - mysql.cnmsql.co
@@ -148,6 +151,7 @@ rules:
 - apiGroups:
   - mysql.cnmsql.co
   resources:
+  - backups/finalizers
   - clusters/finalizers
   - databases/finalizers
   - databaseusers/finalizers
