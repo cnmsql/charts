@@ -2246,11 +2246,16 @@ spec:
                       region:
                         description: |-
                           Region is the bucket region. Required by most providers; for AWS it
-                          selects the regional endpoint.
+                          selects the regional endpoint. When empty it defaults to the region the
+                          endpoint expects requests to be signed with: "auto" for Cloudflare R2,
+                          "us-east-1" everywhere else (which MinIO, Ceph and friends accept).
                         type: string
                       serverSideEncryption:
-                        description: ServerSideEncryption sets the SSE algorithm (e.g.
-                          "AES256" or "aws:kms").
+                        description: |-
+                          ServerSideEncryption sets the SSE algorithm applied to every uploaded
+                          object: "AES256" (SSE-S3), "aws:kms", or "aws:kms:<key-id>". Leave unset on
+                          providers that encrypt at rest unconditionally (MinIO, R2, B2), which
+                          reject or silently ignore the SSE header.
                         type: string
                       signatureVersion:
                         default: s3v4
@@ -2262,8 +2267,10 @@ spec:
                         - s3v2
                         type: string
                       storageClass:
-                        description: StorageClass sets the object storage class (e.g.
-                          "STANDARD_IA").
+                        description: |-
+                          StorageClass sets the storage class of every uploaded object (e.g.
+                          "STANDARD_IA"). Leave unset on providers with a single class; a class the
+                          provider does not know is rejected at upload time.
                         type: string
                       tls:
                         description: TLS configuration for the endpoint connection.
@@ -3019,11 +3026,16 @@ spec:
                         region:
                           description: |-
                             Region is the bucket region. Required by most providers; for AWS it
-                            selects the regional endpoint.
+                            selects the regional endpoint. When empty it defaults to the region the
+                            endpoint expects requests to be signed with: "auto" for Cloudflare R2,
+                            "us-east-1" everywhere else (which MinIO, Ceph and friends accept).
                           type: string
                         serverSideEncryption:
-                          description: ServerSideEncryption sets the SSE algorithm
-                            (e.g. "AES256" or "aws:kms").
+                          description: |-
+                            ServerSideEncryption sets the SSE algorithm applied to every uploaded
+                            object: "AES256" (SSE-S3), "aws:kms", or "aws:kms:<key-id>". Leave unset on
+                            providers that encrypt at rest unconditionally (MinIO, R2, B2), which
+                            reject or silently ignore the SSE header.
                           type: string
                         signatureVersion:
                           default: s3v4
@@ -3035,8 +3047,10 @@ spec:
                           - s3v2
                           type: string
                         storageClass:
-                          description: StorageClass sets the object storage class
-                            (e.g. "STANDARD_IA").
+                          description: |-
+                            StorageClass sets the storage class of every uploaded object (e.g.
+                            "STANDARD_IA"). Leave unset on providers with a single class; a class the
+                            provider does not know is rejected at upload time.
                           type: string
                         tls:
                           description: TLS configuration for the endpoint connection.
@@ -3134,6 +3148,140 @@ spec:
                   declaring an unreachable primary failed and triggering a failover.
                 format: int32
                 type: integer
+              failoverPolicy:
+                description: |-
+                  FailoverPolicy bounds and steers automatic primary election. When it is
+                  unset, the operator promotes the most advanced reachable replica and puts
+                  no limit on how far behind that replica may be.
+                properties:
+                  maxReplicationLag:
+                    description: |-
+                      MaxReplicationLag caps how far behind a replica may be, in seconds of
+                      writes, and still be promoted during an unplanned failover. It states the
+                      same bound as MaxTransactionsBehind in the unit a recovery objective is
+                      normally written in: a hundred transactions may be a millisecond of writes
+                      or an hour of them, and only the clock version can be held against an RPO.
+
+                      The measurement comes from the heartbeat the primary stamps into a
+                      replicated table (see spec.replication.heartbeat), which must be enabled for
+                      this bound to have anything to read. A replica's raw reading climbs by one
+                      second per second once the primary stops stamping, so the operator subtracts
+                      how long the primary has been failing and is left with the delay as it stood
+                      when the primary died. That subtraction starts from the moment the operator
+                      noticed the failure, which is never earlier than the failure itself, so the
+                      result overstates the loss rather than understating it.
+
+                      It is checked only against replicas that actually missed transactions. A
+                      replica holding every transaction the primary committed loses nothing by
+                      being promoted, however far its applier has fallen behind, and the wait for
+                      it to drain its relay log is delay rather than loss.
+
+                      If no replica is within the bound, the operator refuses the failover and
+                      moves the cluster to Blocked, exactly as it does for MaxTransactionsBehind.
+                      Leave it unset for no time bound.
+                    type: string
+                  maxTransactionsBehind:
+                    description: |-
+                      MaxTransactionsBehind caps how many transactions a replica may be missing
+                      and still be promoted during an unplanned failover. The operator measures
+                      the gap in GTIDs, against the last position it recorded for the primary in
+                      status.gtidExecutedByInstance, because the primary itself cannot be asked
+                      once it is down. It refreshes that snapshot periodically rather than on
+                      every commit, so the gap is a lower bound on the true loss and can under
+                      report it, but never over report it.
+
+                      The gap is not read from Seconds_Behind_Source. That column reports how far
+                      the SQL applier trails the events it has already received. A replica that
+                      stopped receiving reads zero there once it drains its relay log, no matter
+                      how many transactions the primary committed without it, which is precisely
+                      the case that loses data. The column is also NULL whenever the replication
+                      IO thread is disconnected, and it always is on a replica whose primary has
+                      just failed.
+
+                      If every replica exceeds the bound, the operator refuses the failover and
+                      moves the cluster to Blocked, reporting the size of the gap, rather than
+                      promote a replica and discard the transactions it never received. Writes
+                      then stay down until the old primary comes back with its data, or until an
+                      operator accepts the loss by raising this bound. Leave it unset for no
+                      bound, in which case the most advanced replica is promoted however far
+                      behind it is.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  minTimeBetweenFailovers:
+                    description: |-
+                      MinTimeBetweenFailovers damps a flapping primary: it refuses an automatic
+                      failover that comes less than this long after the previous one settled, so a
+                      primary that dies, is replaced, and whose replacement dies again does not walk
+                      the role through every instance in the cluster in a matter of minutes.
+
+                      A refusal moves the cluster to Blocked and names the time remaining. It does
+                      not stop the operator from recreating the failed primary's Pod, which is the
+                      outcome the wait exists to allow: a primary that is failing intermittently is
+                      usually better restarted in place than replaced.
+
+                      It bounds automatic promotions only. A switchover you request by writing
+                      status.targetPrimary is honoured immediately, since a human asking for the
+                      primary to move is not the operator flapping.
+
+                      Leave it unset to allow a failover as soon as spec.failoverDelay has elapsed,
+                      however recently the last one happened.
+                    type: string
+                  preferredPrimary:
+                    description: |-
+                      PreferredPrimary names the instances that should hold the primary role, most
+                      preferred first, as a way to steer the primary onto particular nodes: pin an
+                      instance to a node with the storage or the zone you want writes to land on,
+                      and name it here.
+
+                      It steers two things. In an election it orders the candidates, so the most
+                      preferred one that is *also safe* wins. It is only ever a tie-break: a
+                      preferred instance that has diverged, that is missing transactions the bounds
+                      above refuse to lose, or that cannot be proven to hold every other candidate's
+                      transactions, is passed over for one that can. Preference never promotes a
+                      replica that the operator would otherwise have refused.
+
+                      It also brings the primary back. When the primary is not the most preferred
+                      instance that is currently available, and that instance is a healthy replica
+                      fit to be a switchover target, the operator performs a planned switchover to
+                      it. That happens after any failover away from it has healed, so a preferred
+                      instance that keeps failing does not cause the primary to bounce back to it:
+                      the failback waits out MinTimeBetweenFailovers like any other automatic
+                      promotion.
+
+                      Names are instance (Pod) names, e.g. "my-cluster-1". Instances that do not
+                      exist are ignored, so a list may name instances of a cluster larger than the
+                      current one. Leave it unset to let the election pick purely on safety and
+                      ordinal order, and to never move a healthy primary.
+                    items:
+                      type: string
+                    type: array
+                  primaryStabilityWindow:
+                    description: |-
+                      PrimaryStabilityWindow decides when a promoted primary counts as settled, and
+                      so when MinTimeBetweenFailovers starts running. Without it the cooldown runs
+                      from the moment of the promotion, and a primary that comes up, flaps, and
+                      comes up again still burns the cooldown down while it is misbehaving; once the
+                      cooldown expires the operator fails away from an instance that was never
+                      really working.
+
+                      With it, the cooldown runs from the point the primary had been continuously
+                      healthy for this long. Every time it drops out, the clock restarts, so an
+                      instance that cannot stay up never settles and the operator keeps declining to
+                      fail over on its behalf, leaving it to recover or an operator to intervene
+                      rather than dragging the rest of the cluster through the churn.
+
+                      A primary that has been healthy for longer than this window settled long ago,
+                      which is every primary in a cluster that is not flapping, so this costs
+                      nothing in the ordinary case. A promoted primary that never became healthy at
+                      all cannot settle by staying up, so the cooldown falls back to running from
+                      the promotion and the operator is never trapped waiting on an instance that
+                      will not arrive.
+
+                      It has no effect on its own without MinTimeBetweenFailovers, which is the
+                      bound it qualifies.
+                    type: string
+                type: object
               flavor:
                 default: mysql
                 description: |-
@@ -4020,6 +4168,26 @@ spec:
                           changed group name fractures the group.
                         type: string
                     type: object
+                  heartbeat:
+                    description: Heartbeat tunes the replication-lag heartbeat, which
+                      is on by default.
+                    properties:
+                      enabled:
+                        default: true
+                        description: |-
+                          Enabled turns the heartbeat on. It defaults to true: the cost is one small
+                          replicated write per interval on the primary, and it is what
+                          failoverPolicy.maxReplicationLag and the lag metrics read.
+                        type: boolean
+                      interval:
+                        default: 1s
+                        description: |-
+                          Interval is how often the primary stamps the table. It sets the floor on
+                          every lag reading, because a replica in perfect sync still reports an age of
+                          up to one interval simply because the next stamp is not written yet. Keep it
+                          well under any maxReplicationLag you set. Defaults to 1s.
+                        type: string
+                    type: object
                   mode:
                     default: async
                     description: Mode is the replication topology. Immutable after
@@ -4873,6 +5041,7 @@ spec:
                   lastArchivedTime:
                     description: LastArchivedTime is when the most recent file finished
                       archiving.
+                    format: date-time
                     type: string
                   lastFailureReason:
                     description: |-
@@ -4880,6 +5049,7 @@ spec:
                       failure on the current primary, if any.
                     type: string
                   lastFailureTime:
+                    format: date-time
                     type: string
                   pendingFiles:
                     description: |-
@@ -4894,6 +5064,7 @@ spec:
               currentPrimaryTimestamp:
                 description: CurrentPrimaryTimestamp is when the current primary was
                   elected.
+                format: date-time
                 type: string
               divergedInstances:
                 description: |-
@@ -5074,6 +5245,15 @@ spec:
                   autoscalers such as the Vertical Pod Autoscaler can discover the managed
                   Pods to resize.
                 type: string
+              lastFailoverTimestamp:
+                description: |-
+                  LastFailoverTimestamp records when the operator last promoted a replica in an
+                  automatic failover. It is what spec.failoverPolicy.minTimeBetweenFailovers is
+                  measured from. A switchover, planned or requested, does not set it: the
+                  cooldown exists to damp the operator reacting to failures, not to delay a
+                  promotion somebody asked for.
+                format: date-time
+                type: string
               lastRetentionRunTime:
                 description: |-
                   LastRetentionRunTime is when the operator last ran a backup-retention GC
@@ -5145,6 +5325,18 @@ spec:
                   PrimaryFailingSince records when the current primary first became
                   unreachable. It is used to enforce spec.failoverDelay before an automatic
                   failover, and is cleared once the primary is healthy again.
+                format: date-time
+                type: string
+              primaryHealthySince:
+                description: |-
+                  PrimaryHealthySince records when the current primary began the unbroken
+                  stretch of health it is now in: it is stamped the first time the primary is
+                  observed healthy and re-stamped whenever it recovers from a failing stretch,
+                  so it moves forward every time the primary drops out. It is what
+                  spec.failoverPolicy.primaryStabilityWindow is measured from. Never earlier
+                  than CurrentPrimaryTimestamp, since a primary's health cannot predate its
+                  election.
+                format: date-time
                 type: string
               readyInstances:
                 description: ReadyInstances is the number of ready instances.
@@ -5161,6 +5353,32 @@ spec:
                 items:
                   type: string
                 type: array
+              replicationLagByInstance:
+                additionalProperties:
+                  format: int64
+                  type: integer
+                description: |-
+                  ReplicationLagByInstance maps an instance name to its replication lag in
+                  milliseconds, as measured by the heartbeat (see
+                  spec.replication.heartbeat). Instances that reported no reading are absent
+                  rather than zero, since zero would say "in sync", which is the opposite of
+                  what an unreadable heartbeat means.
+
+                  It is here to be looked at. The failover bound does not read it: it asks the
+                  surviving replicas for their readings at the moment it elects, which is both
+                  fresher than this snapshot and, unlike the departing primary's GTID
+                  position, still answerable. Expect these values to climb while a primary is
+                  down, because nothing is stamping the heartbeat any more.
+                type: object
+              replicationLagUpdatedAt:
+                description: |-
+                  ReplicationLagUpdatedAt records when ReplicationLagByInstance was last
+                  refreshed. Lag moves constantly, so the operator throttles how often it
+                  persists the map; this timestamp says how old the readings are, and is the
+                  only way to tell a replica that is genuinely one second behind from one
+                  whose last reading merely happened to say so.
+                format: date-time
+                type: string
               resizingPVC:
                 description: |-
                   ResizingPVC lists the PVCs whose storage is currently being expanded — the
@@ -5180,6 +5398,7 @@ spec:
                 description: |-
                   TargetPrimaryTimestamp is when the current switchover request to
                   TargetPrimary was started. It bounds the switchover by spec.maxSwitchoverDelay.
+                format: date-time
                 type: string
             type: object
         required:
