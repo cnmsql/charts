@@ -6,7 +6,7 @@ metadata:
     {{- if .Values.crd.keep }}
     "helm.sh/resource-policy": keep
     {{- end }}
-    controller-gen.kubebuilder.io/version: v0.20.1
+    controller-gen.kubebuilder.io/version: v0.22.0
   name: scheduledbackups.mysql.cnmsql.co
 spec:
   group: mysql.cnmsql.co
@@ -97,6 +97,15 @@ spec:
                   the finished-Job TTL). When unset the generated Backups fall back to the
                   cluster-wide spec.backup.jobTemplate.
                 properties:
+                  activeDeadline:
+                    description: |-
+                      ActiveDeadline bounds how long the backup worker Job may run (its
+                      activeDeadlineSeconds). A worker still running past it is killed and the
+                      Backup fails with reason DeadlineExceeded, so a stalled upload or source
+                      stream surfaces as a failure instead of a Backup left running forever. When
+                      unset on both the Backup and the cluster, the operator uses 24h. A zero
+                      duration disables the deadline.
+                    type: string
                   affinity:
                     description: |-
                       Affinity sets the affinity/anti-affinity rules for the backup worker Job's
@@ -1167,13 +1176,6 @@ spec:
                 description: Online, when true, performs non-blocking (hot) backups.
                 type: boolean
               reclaimPolicy:
-                allOf:
-                - enum:
-                  - Retain
-                  - Delete
-                - enum:
-                  - Retain
-                  - Delete
                 default: Retain
                 description: |-
                   ReclaimPolicy is propagated to every generated Backup as its
@@ -1181,6 +1183,9 @@ spec:
                   finalizer, so deleting it also removes its archive (backup.xbstream +
                   metadata.json) from the object store. Defaults to "Retain", the
                   non-destructive default.
+                enum:
+                - Retain
+                - Delete
                 type: string
               retentionPolicy:
                 description: |-

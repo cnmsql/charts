@@ -6,7 +6,7 @@ metadata:
     {{- if .Values.crd.keep }}
     "helm.sh/resource-policy": keep
     {{- end }}
-    controller-gen.kubebuilder.io/version: v0.20.1
+    controller-gen.kubebuilder.io/version: v0.22.0
   name: backups.mysql.cnmsql.co
 spec:
   group: mysql.cnmsql.co
@@ -73,6 +73,15 @@ spec:
                   labels/annotations, and the finished-Job TTL. It overrides the cluster-wide
                   spec.backup.jobTemplate field by field.
                 properties:
+                  activeDeadline:
+                    description: |-
+                      ActiveDeadline bounds how long the backup worker Job may run (its
+                      activeDeadlineSeconds). A worker still running past it is killed and the
+                      Backup fails with reason DeadlineExceeded, so a stalled upload or source
+                      stream surfaces as a failure instead of a Backup left running forever. When
+                      unset on both the Backup and the cluster, the operator uses 24h. A zero
+                      duration disables the deadline.
+                    type: string
                   affinity:
                     description: |-
                       Affinity sets the affinity/anti-affinity rules for the backup worker Job's
@@ -1280,19 +1289,15 @@ spec:
                   Defaults to true.
                 type: boolean
               reclaimPolicy:
-                allOf:
-                - enum:
-                  - Retain
-                  - Delete
-                - enum:
-                  - Retain
-                  - Delete
                 default: Retain
                 description: |-
                   ReclaimPolicy controls what happens to this backup's object-store archive
                   (backup.xbstream + metadata.json) when the Backup object is deleted. With
                   "Delete" the operator adds the cleanup finalizer and removes the archive on
                   deletion; with "Retain" (the default) the archive is kept.
+                enum:
+                - Retain
+                - Delete
                 type: string
               target:
                 default: prefer-standby
