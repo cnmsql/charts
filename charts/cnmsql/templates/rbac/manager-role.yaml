@@ -112,6 +112,7 @@ rules:
   - clusters/status
   - databases/status
   - databaseusers/status
+  - logicalrestores/status
   - scheduledbackups/status
   verbs:
   - get
@@ -141,6 +142,7 @@ rules:
   - clusters
   - databases
   - databaseusers
+  - logicalrestores
   - scheduledbackups
   verbs:
   - get
@@ -155,6 +157,7 @@ rules:
   - clusters/finalizers
   - databases/finalizers
   - databaseusers/finalizers
+  - logicalrestores/finalizers
   verbs:
   - update
 - apiGroups:
