@@ -26,6 +26,9 @@ spec:
     - jsonPath: .status.flavor
       name: Flavor
       type: string
+    - jsonPath: .status.targetImage.serverVersion
+      name: Version
+      type: string
     - jsonPath: .status.instances
       name: Instances
       type: integer
@@ -44,7 +47,9 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Cluster is the Schema for the clusters API.
+        description: |-
+          Cluster describes a MySQL or MariaDB deployment: its topology, image,
+          storage, bootstrap method, backups, and operational policy.
         properties:
           apiVersion:
             description: |-
@@ -1088,20 +1093,163 @@ spec:
                         format: int32
                         minimum: 1
                         type: integer
+                      objectStore:
+                        description: |-
+                          ObjectStore is where the binary-log archive is written. When unset, the
+                          archive goes to spec.backup.objectStore next to the base backups. The
+                          archive keeps the same layout in either store: `<path>/<cluster>/binlogs/`.
+                          Changing it starts a new archive in the new store from the oldest binary
+                          log still on the primary; take a new base backup afterwards.
+                        properties:
+                          bucket:
+                            description: Bucket is the destination bucket name.
+                            type: string
+                          credentials:
+                            description: Credentials to access the object store.
+                            properties:
+                              accessKeyId:
+                                description: The reference to the secret key containing
+                                  the access key id.
+                                properties:
+                                  key:
+                                    description: Key within the Secret to select
+                                    type: string
+                                  name:
+                                    description: Name of the Secret
+                                    type: string
+                                required:
+                                - key
+                                - name
+                                type: object
+                              inheritFromIAMRole:
+                                default: false
+                                description: |-
+                                  InheritFromIAMRole, when true, makes the credentials be retrieved from the
+                                  pod's environment (IRSA / instance profile) instead of from a secret.
+                                type: boolean
+                              secretAccessKey:
+                                description: The reference to the secret key containing
+                                  the secret access key.
+                                properties:
+                                  key:
+                                    description: Key within the Secret to select
+                                    type: string
+                                  name:
+                                    description: Name of the Secret
+                                    type: string
+                                required:
+                                - key
+                                - name
+                                type: object
+                              sessionToken:
+                                description: |-
+                                  The reference to the secret key containing the session token, used for
+                                  temporary credentials.
+                                properties:
+                                  key:
+                                    description: Key within the Secret to select
+                                    type: string
+                                  name:
+                                    description: Name of the Secret
+                                    type: string
+                                required:
+                                - key
+                                - name
+                                type: object
+                            type: object
+                          endpoint:
+                            description: |-
+                              Endpoint is the URL of the S3-compatible service. Leave empty to target
+                              AWS S3 with the region's default endpoint.
+                            type: string
+                          forcePathStyle:
+                            default: true
+                            description: |-
+                              ForcePathStyle uses path-style addressing (endpoint/bucket/key) instead of
+                              virtual-hosted style (bucket.endpoint/key). Required by MinIO, Ceph and
+                              most non-AWS providers; defaults to true for maximum compatibility.
+                            type: boolean
+                          path:
+                            description: |-
+                              Path is the key prefix (folder) inside the bucket under which backups are
+                              stored.
+                            type: string
+                          region:
+                            description: |-
+                              Region is the bucket region. Required by most providers; for AWS it
+                              selects the regional endpoint. When empty it defaults to the region the
+                              endpoint expects requests to be signed with: "auto" for Cloudflare R2,
+                              "us-east-1" everywhere else (which MinIO, Ceph and friends accept).
+                            type: string
+                          serverSideEncryption:
+                            description: |-
+                              ServerSideEncryption sets the SSE algorithm applied to every uploaded
+                              object: `AES256` (SSE-S3), `aws:kms`, or `aws:kms:<key-id>`. Leave unset on
+                              providers that encrypt at rest unconditionally (MinIO, R2, B2), which
+                              reject or silently ignore the SSE header.
+                            type: string
+                          signatureVersion:
+                            default: s3v4
+                            description: |-
+                              SignatureVersion selects the request signing scheme. Defaults to s3v4;
+                              set to s3v2 for legacy providers.
+                            enum:
+                            - s3v4
+                            - s3v2
+                            type: string
+                          storageClass:
+                            description: |-
+                              StorageClass sets the storage class of every uploaded object (e.g.
+                              "STANDARD_IA"). Leave unset on providers with a single class; a class the
+                              provider does not know is rejected at upload time.
+                            type: string
+                          tls:
+                            description: TLS configuration for the endpoint connection.
+                            properties:
+                              caBundleSecret:
+                                description: |-
+                                  CABundleSecret references a secret key holding a PEM CA bundle used to
+                                  verify the endpoint certificate (for private CAs / self-signed endpoints).
+                                properties:
+                                  key:
+                                    description: Key within the Secret to select
+                                    type: string
+                                  name:
+                                    description: Name of the Secret
+                                    type: string
+                                required:
+                                - key
+                                - name
+                                type: object
+                              insecureSkipVerify:
+                                default: false
+                                description: |-
+                                  InsecureSkipVerify disables TLS certificate verification against the
+                                  endpoint. Use only for testing.
+                                type: boolean
+                            type: object
+                        required:
+                        - bucket
+                        - credentials
+                        type: object
                       purgeAfterArchive:
                         default: false
                         description: |-
-                          PurgeAfterArchive turns on the active purge gate: the archiver runs PURGE
-                          BINARY LOGS up to the last successfully archived file, reclaiming binlog
-                          space as soon as it is safely in the object store instead of waiting for
-                          binlogExpireSeconds.
+                          PurgeAfterArchive turns on the active purge gate: the primary runs PURGE
+                          BINARY LOGS on a binary log once it is safely in the object store and
+                          every other instance of the cluster has applied the transactions it holds,
+                          reclaiming binlog space without waiting for binlogExpireSeconds.
 
-                          Defaults to false. Purging on archive keeps the data volume small, but it
-                          removes binlogs a replica may still need: a replica that was down, lagged,
-                          or is rejoining must then be re-cloned from a backup rather than catching
-                          up from the primary. Enable it only when the data volume cannot hold
-                          binlogExpireSeconds worth of writes, and prefer lowering
-                          binlogExpireSeconds first.
+                          The replicas' positions come from status.gtidExecutedByInstance, which the
+                          operator refreshes at least every five minutes, so purging trails writes by
+                          about that much. An instance whose position is unknown (still joining, for
+                          example) holds every file; a fenced instance holds the files it has not
+                          applied; a diverged instance, which must be re-cloned anyway, holds none.
+                          When the same file stays held for a while the BinlogPurgeHeld condition
+                          names the instances holding it. binlogExpireSeconds still applies on its
+                          own, so a replica down for longer than that must be re-cloned.
+
+                          Defaults to false.
                         type: boolean
                       targetRPOSeconds:
                         default: 300
@@ -1119,7 +1267,7 @@ spec:
                       this cluster: resources, scheduling (nodeSelector/tolerations/affinity/
                       priorityClassName), extra labels/annotations, and the finished-Job TTL. A
                       per-Backup spec.jobTemplate overrides it field by field. During recovery the
-                      resources from this template are also applied to the restore init container.
+                      resources from this template are also applied to the restore Job.
                     properties:
                       activeDeadline:
                         description: |-
@@ -2295,7 +2443,7 @@ spec:
                       serverSideEncryption:
                         description: |-
                           ServerSideEncryption sets the SSE algorithm applied to every uploaded
-                          object: "AES256" (SSE-S3), "aws:kms", or "aws:kms:<key-id>". Leave unset on
+                          object: `AES256` (SSE-S3), `aws:kms`, or `aws:kms:<key-id>`. Leave unset on
                           providers that encrypt at rest unconditionally (MinIO, R2, B2), which
                           reject or silently ignore the SSE header.
                         type: string
@@ -2748,7 +2896,8 @@ spec:
                     description: |-
                       The secret of type kubernetes.io/tls containing the client certificate to
                       authenticate as the replication user. Should be signed by the CA in
-                      ClientCASecret.
+                      ClientCASecret. It is the operator's client certificate for the instance
+                      control API, so its common name must be cnmsql-operator.
                     type: string
                   serverAltDNSNames:
                     description: |-
@@ -2767,12 +2916,24 @@ spec:
                     description: |-
                       The secret of type kubernetes.io/tls containing the server TLS certificate
                       and key that will be set as ssl-cert and ssl-key. Should be signed by the
-                      CA in ServerCASecret.
+                      CA in ServerCASecret. Its common name must not be cnmsql-operator.
                     type: string
                 type: object
               description:
                 description: Description of this MySQL cluster.
                 type: string
+              enableFailover:
+                default: true
+                description: |-
+                  EnableFailover, when true (default), lets the operator promote a replica
+                  when the primary becomes unreachable. Set it to false to pin the primary
+                  role to whichever instance currently holds it: the operator promotes
+                  nothing, the failed primary's Pod is still recreated so it can recover in
+                  place, and the cluster reports Blocked until the primary is back or a
+                  manual switchover moves the role. Planned handoffs are unaffected — manual
+                  switchover and enableSwitchoverOnDrain keep working. Group Replication
+                  clusters ignore this switch: the group elects its own primary.
+                type: boolean
               enablePDB:
                 default: true
                 description: |-
@@ -3019,6 +3180,143 @@ spec:
                     ExternalCluster describes a MySQL server external to this Cluster, used as a
                     replication source or recovery origin.
                   properties:
+                    binlogObjectStore:
+                      description: |-
+                        BinlogObjectStore is where the external cluster's binary-log archive
+                        lives, when it is not in ObjectStore. Recovery reads base backups from
+                        ObjectStore and binlogs from here.
+                      properties:
+                        bucket:
+                          description: Bucket is the destination bucket name.
+                          type: string
+                        credentials:
+                          description: Credentials to access the object store.
+                          properties:
+                            accessKeyId:
+                              description: The reference to the secret key containing
+                                the access key id.
+                              properties:
+                                key:
+                                  description: Key within the Secret to select
+                                  type: string
+                                name:
+                                  description: Name of the Secret
+                                  type: string
+                              required:
+                              - key
+                              - name
+                              type: object
+                            inheritFromIAMRole:
+                              default: false
+                              description: |-
+                                InheritFromIAMRole, when true, makes the credentials be retrieved from the
+                                pod's environment (IRSA / instance profile) instead of from a secret.
+                              type: boolean
+                            secretAccessKey:
+                              description: The reference to the secret key containing
+                                the secret access key.
+                              properties:
+                                key:
+                                  description: Key within the Secret to select
+                                  type: string
+                                name:
+                                  description: Name of the Secret
+                                  type: string
+                              required:
+                              - key
+                              - name
+                              type: object
+                            sessionToken:
+                              description: |-
+                                The reference to the secret key containing the session token, used for
+                                temporary credentials.
+                              properties:
+                                key:
+                                  description: Key within the Secret to select
+                                  type: string
+                                name:
+                                  description: Name of the Secret
+                                  type: string
+                              required:
+                              - key
+                              - name
+                              type: object
+                          type: object
+                        endpoint:
+                          description: |-
+                            Endpoint is the URL of the S3-compatible service. Leave empty to target
+                            AWS S3 with the region's default endpoint.
+                          type: string
+                        forcePathStyle:
+                          default: true
+                          description: |-
+                            ForcePathStyle uses path-style addressing (endpoint/bucket/key) instead of
+                            virtual-hosted style (bucket.endpoint/key). Required by MinIO, Ceph and
+                            most non-AWS providers; defaults to true for maximum compatibility.
+                          type: boolean
+                        path:
+                          description: |-
+                            Path is the key prefix (folder) inside the bucket under which backups are
+                            stored.
+                          type: string
+                        region:
+                          description: |-
+                            Region is the bucket region. Required by most providers; for AWS it
+                            selects the regional endpoint. When empty it defaults to the region the
+                            endpoint expects requests to be signed with: "auto" for Cloudflare R2,
+                            "us-east-1" everywhere else (which MinIO, Ceph and friends accept).
+                          type: string
+                        serverSideEncryption:
+                          description: |-
+                            ServerSideEncryption sets the SSE algorithm applied to every uploaded
+                            object: `AES256` (SSE-S3), `aws:kms`, or `aws:kms:<key-id>`. Leave unset on
+                            providers that encrypt at rest unconditionally (MinIO, R2, B2), which
+                            reject or silently ignore the SSE header.
+                          type: string
+                        signatureVersion:
+                          default: s3v4
+                          description: |-
+                            SignatureVersion selects the request signing scheme. Defaults to s3v4;
+                            set to s3v2 for legacy providers.
+                          enum:
+                          - s3v4
+                          - s3v2
+                          type: string
+                        storageClass:
+                          description: |-
+                            StorageClass sets the storage class of every uploaded object (e.g.
+                            "STANDARD_IA"). Leave unset on providers with a single class; a class the
+                            provider does not know is rejected at upload time.
+                          type: string
+                        tls:
+                          description: TLS configuration for the endpoint connection.
+                          properties:
+                            caBundleSecret:
+                              description: |-
+                                CABundleSecret references a secret key holding a PEM CA bundle used to
+                                verify the endpoint certificate (for private CAs / self-signed endpoints).
+                              properties:
+                                key:
+                                  description: Key within the Secret to select
+                                  type: string
+                                name:
+                                  description: Name of the Secret
+                                  type: string
+                              required:
+                              - key
+                              - name
+                              type: object
+                            insecureSkipVerify:
+                              default: false
+                              description: |-
+                                InsecureSkipVerify disables TLS certificate verification against the
+                                endpoint. Use only for testing.
+                              type: boolean
+                          type: object
+                      required:
+                      - bucket
+                      - credentials
+                      type: object
                     connectionParameters:
                       additionalProperties:
                         type: string
@@ -3118,7 +3416,7 @@ spec:
                         serverSideEncryption:
                           description: |-
                             ServerSideEncryption sets the SSE algorithm applied to every uploaded
-                            object: "AES256" (SSE-S3), "aws:kms", or "aws:kms:<key-id>". Leave unset on
+                            object: `AES256` (SSE-S3), `aws:kms`, or `aws:kms:<key-id>`. Leave unset on
                             providers that encrypt at rest unconditionally (MinIO, R2, B2), which
                             reject or silently ignore the SSE header.
                           type: string
@@ -3397,7 +3695,7 @@ spec:
                   series:
                     description: |-
                       Series is the MySQL release series to resolve in the catalog, in
-                      "major.minor" form (e.g. "8.0", "8.4", "9.0").
+                      "major.minor" form (e.g. "8.0", "8.4", "9.7").
                     pattern: ^[0-9]+\.[0-9]+$
                     type: string
                 required:
@@ -3526,7 +3824,7 @@ spec:
                           description: |-
                             PasswordSecret references a Secret key holding the user's password. When
                             unset, the operator generates a password and stores it in a Secret named
-                            "<cluster>-<name>" with key "password".
+                            `<cluster>-<name>` with key "password".
                           properties:
                             key:
                               description: Key within the Secret to select
@@ -3595,7 +3893,7 @@ spec:
                               description: |-
                                 Name is the name of the additional service. Must be unique among all
                                 managed services and must not collide with the default service names
-                                (<cluster>-rw, <cluster>-ro, <cluster>-r).
+                                (`<cluster>-rw`, `<cluster>-ro`, `<cluster>-r`).
                               type: string
                             selectorType:
                               description: |-
@@ -3844,6 +4142,33 @@ spec:
                       MetricsQueriesTTL is the minimum interval between executions of the
                       default and custom monitoring queries.
                     type: string
+                  privileges:
+                    description: |-
+                      Privileges are extra grants for the cnmsql_metrics account that custom
+                      queries run as. Only SELECT and SHOW VIEW on a database (db.*) or a
+                      table (db.table) are allowed; *.* and the mysql schema are refused. The
+                      operator applies them on the primary and revokes any other grant the
+                      account holds, except its built-in ones. Each entry must set on.
+                    items:
+                      description: RolePrivilege is a grant of one or more privileges
+                        on a target.
+                      properties:
+                        "on":
+                          description: On is the target (e.g. "*.*", "mydb.*"). Defaults
+                            to "*.*".
+                          type: string
+                        privileges:
+                          description: Privileges is the grant list (SELECT, INSERT,
+                            ALL, etc.).
+                          items:
+                            type: string
+                          minItems: 1
+                          type: array
+                      required:
+                      - privileges
+                      type: object
+                    maxItems: 32
+                    type: array
                   tls:
                     description: TLS configures TLS for the instance metrics endpoint.
                     properties:
@@ -5051,7 +5376,8 @@ spec:
                     description: |-
                       The secret of type kubernetes.io/tls containing the client certificate to
                       authenticate as the replication user. Should be signed by the CA in
-                      ClientCASecret.
+                      ClientCASecret. It is the operator's client certificate for the instance
+                      control API, so its common name must be cnmsql-operator.
                     type: string
                   serverAltDNSNames:
                     description: |-
@@ -5070,7 +5396,7 @@ spec:
                     description: |-
                       The secret of type kubernetes.io/tls containing the server TLS certificate
                       and key that will be set as ssl-cert and ssl-key. Should be signed by the
-                      CA in ServerCASecret.
+                      CA in ServerCASecret. Its common name must not be cnmsql-operator.
                     type: string
                 type: object
               conditions:
@@ -5140,10 +5466,64 @@ spec:
                   ContinuousArchiving reports the health of continuous binlog archiving when
                   it is enabled.
                 properties:
+                  coveredGTIDSet:
+                    description: |-
+                      CoveredGTIDSet (MySQL) is every transaction the archive holds. Failover
+                      prefers, among equally advanced replicas, one whose binary-log history
+                      the archive already covers.
+                    type: string
+                  destination:
+                    description: |-
+                      Destination is the archive location in use, `<endpoint>/<bucket>/<path>`
+                      (endpoint empty for AWS). A change is reported with an ArchiveMoved
+                      Warning event.
+                    type: string
+                  disownedGTIDs:
+                    description: |-
+                      DisownedGTIDs (MySQL) is every transaction the archive recorded as
+                      disowned, including dead branches whose segment retention already
+                      dropped and the dead part of base backups. An instance holding any of
+                      them is diverged.
+                    type: string
                   enabled:
                     description: Enabled mirrors whether continuous archiving is configured
                       on.
                     type: boolean
+                  forkDetectedAt:
+                    description: ForkDetectedAt is when the earliest of those records
+                      was written.
+                    format: date-time
+                    type: string
+                  forkGTIDs:
+                    description: |-
+                      ForkGTIDs lists, one entry per archive segment, the archived
+                      transactions the surviving timeline never executed (a dead branch left
+                      by a lagged promotion): the MySQL GTID set, or a MariaDB range such as
+                      `0-1-219..0-1-225`. Point-in-time recovery to a time or to the latest
+                      point leaves them out; an explicit targetGTID can still recover them.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  gaps:
+                    description: |-
+                      Gaps lists the stretches of the timeline the archive is missing between
+                      transactions it holds (a MySQL GTID set, or a MariaDB
+                      `domain-first..last` range): point-in-time recovery from a base backup
+                      taken before one of them cannot cross it. They come from a binary log
+                      that left the server before it was archived, typically a successor
+                      cloned after the last archived file whose predecessor then died.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  gapsSince:
+                    description: |-
+                      GapsSince is when the archive started reporting these gaps. A gap the
+                      former primary's drain fills soon after a failover never raises
+                      ArchiveGap; one that outlives the grace period does.
+                    format: date-time
+                    type: string
                   lastArchivedBinlog:
                     description: |-
                       LastArchivedBinlog is the most recent binary-log file shipped by the
@@ -5166,16 +5546,45 @@ spec:
                   lastFailureTime:
                     format: date-time
                     type: string
+                  oldestSegmentPosition:
+                    description: |-
+                      OldestSegmentPosition (MariaDB) is the lowest GTID position any archive
+                      segment reached, per domain. The operator keeps the MariaDB primary
+                      timeline back to it.
+                    type: string
                   pendingFiles:
                     description: |-
                       PendingFiles is the number of rotated binary logs not yet archived
                       (archive lag). A growing value means the archiver is falling behind.
                     type: integer
+                  purgeHeldBy:
+                    description: |-
+                      PurgeHeldBy lists the instances that have not applied the oldest archived
+                      binary log on the primary, which keeps the purge gate from removing it.
+                      Empty when the purge gate is off or holds nothing back.
+                    items:
+                      type: string
+                    type: array
+                  purgeHeldSince:
+                    description: PurgeHeldSince is when the purge gate started keeping
+                      that binary log.
+                    format: date-time
+                    type: string
                 type: object
               currentPrimary:
                 description: CurrentPrimary is the name of the instance currently
                   acting as primary.
                 type: string
+              currentPrimaryGeneration:
+                description: |-
+                  CurrentPrimaryGeneration counts the changes of currentPrimary: the
+                  instance that records itself as currentPrimary raises it by one in the
+                  same update (the operator does under Group Replication). It fences the
+                  binlog archive: a primary stamps its generation into the archive index,
+                  and a writer with a lower generation, a demoted primary still finishing a
+                  pass, never judges the archive's segments.
+                format: int64
+                type: integer
               currentPrimaryTimestamp:
                 description: CurrentPrimaryTimestamp is when the current primary was
                   elected.
@@ -5433,6 +5842,46 @@ spec:
                       version per role.
                     type: object
                 type: object
+              mariadbTimeline:
+                description: |-
+                  MariaDBTimeline (MariaDB) records each change of primary, oldest first.
+                  Entry i says that, in every replication domain, the transactions after
+                  its handoff up to the next entry's handoff were authored by its server
+                  id. A MariaDB GTID position names only the author of its last
+                  transaction; this history is what tells a forked former primary from a
+                  lagging one. The oldest entries are dropped once no instance position or
+                  archive segment needs them. Not recorded on replica clusters.
+                items:
+                  description: MariaDBEpoch is one change of primary on a MariaDB
+                    cluster.
+                  properties:
+                    handoff:
+                      description: |-
+                        Handoff is its @@gtid_slave_pos when it took authority: per domain, the
+                        last transaction it inherited.
+                      type: string
+                    instance:
+                      description: Instance is the primary of this epoch.
+                      type: string
+                    serverID:
+                      description: |-
+                        ServerID is its @@server_id, the server component of the GTIDs it
+                        authors.
+                      format: int32
+                      type: integer
+                    since:
+                      description: Since is when the operator first observed it as
+                        primary.
+                      format: date-time
+                      type: string
+                  required:
+                  - instance
+                  - serverID
+                  - since
+                  type: object
+                maxItems: 256
+                type: array
+                x-kubernetes-list-type: atomic
               observedGeneration:
                 description: ObservedGeneration is the generation observed by the
                   controller.
@@ -5518,6 +5967,40 @@ spec:
                 items:
                   type: string
                 type: array
+              targetImage:
+                description: |-
+                  TargetImage is what the operator learned about the image it rolls the
+                  instances to, by running it in a probe Pod: the server version and flavor
+                  the image's server binary reports, and the digest the kubelet pulled. A
+                  new image is probed and validated before any instance moves to it; until
+                  then the cluster stays on this one (see the ImageReady condition).
+                properties:
+                  flavor:
+                    description: Flavor is the engine the image contains (mysql or
+                      mariadb).
+                    enum:
+                    - mysql
+                    - mariadb
+                    type: string
+                  image:
+                    description: |-
+                      Image is the image reference that was probed, as resolved from
+                      spec.imageName or the image catalog.
+                    type: string
+                  imageID:
+                    description: |-
+                      ImageID is the image the kubelet pulled for the probe, as reported in
+                      the probe Pod's container status (typically repository@sha256:digest).
+                    type: string
+                  serverVersion:
+                    description: ServerVersion is the server release the image contains,
+                      e.g. "8.4.11".
+                    type: string
+                required:
+                - flavor
+                - image
+                - serverVersion
+                type: object
               targetPrimary:
                 description: |-
                   TargetPrimary is the name of the instance that should become primary (used

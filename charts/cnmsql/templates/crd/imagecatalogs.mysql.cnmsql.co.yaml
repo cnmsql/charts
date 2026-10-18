@@ -22,7 +22,9 @@ spec:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: ImageCatalog is the Schema for the imagecatalogs API (namespaced).
+        description: |-
+          ImageCatalog maps each server series to an instance image for Clusters in
+          its namespace. A Cluster selects an entry with spec.imageCatalogRef.
         properties:
           apiVersion:
             description: |-
@@ -71,7 +73,7 @@ spec:
                     series:
                       description: |-
                         Series is the MySQL release series in "major.minor" form (e.g. "8.0",
-                        "8.4", "9.0"). It must match the image's server version line.
+                        "8.4", "9.7"). It must match the image's server version line.
                       pattern: ^[0-9]+\.[0-9]+$
                       type: string
                   required:

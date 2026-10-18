@@ -23,8 +23,8 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          ClusterImageCatalog is the Schema for the clusterimagecatalogs API
-          (cluster-scoped).
+          ClusterImageCatalog maps each server series to an instance image, like
+          ImageCatalog, but is cluster-scoped so Clusters in any namespace can use it.
         properties:
           apiVersion:
             description: |-
@@ -73,7 +73,7 @@ spec:
                     series:
                       description: |-
                         Series is the MySQL release series in "major.minor" form (e.g. "8.0",
-                        "8.4", "9.0"). It must match the image's server version line.
+                        "8.4", "9.7"). It must match the image's server version line.
                       pattern: ^[0-9]+\.[0-9]+$
                       type: string
                   required:
