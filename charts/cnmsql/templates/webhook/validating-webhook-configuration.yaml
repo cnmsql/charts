@@ -25,7 +25,7 @@ webhooks:
     operations:
     - UPDATE
     resources:
-    - clusters
+    - clusters/status
   sideEffects: None
   {{- if .Values.rbac.namespaced }}
   namespaceSelector:
@@ -51,6 +51,31 @@ webhooks:
     - UPDATE
     resources:
     - clusters
+  sideEffects: None
+  {{- if .Values.rbac.namespaced }}
+  namespaceSelector:
+    matchLabels:
+      "kubernetes.io/metadata.name": {{ .Release.Namespace | quote }}
+  {{- end }}
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "cnmsql.resourceName" (dict "suffix" "webhook-service" "context" $) }}
+      namespace: {{ .Release.Namespace }}
+      path: /validate-mysql-cnmsql-io-v1alpha1-database
+  failurePolicy: Fail
+  name: vdatabase-v1alpha1.cnmsql.co
+  rules:
+  - apiGroups:
+    - mysql.cnmsql.co
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - databases
   sideEffects: None
   {{- if .Values.rbac.namespaced }}
   namespaceSelector:

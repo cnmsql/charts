@@ -98,7 +98,10 @@ spec:
               name:
                 description: |-
                   Name is the name of the MySQL database (schema). Defaults to the resource
-                  name if empty.
+                  name if empty. It is immutable, since the inline users' grants are
+                  confined to it. The system schemas (mysql, information_schema,
+                  performance_schema, sys) and the operator's heartbeat schema are
+                  reserved, and the name may not contain %, a backslash or a backtick.
                 type: string
               reclaimPolicy:
                 default: retain
@@ -133,12 +136,18 @@ spec:
                         properties:
                           "on":
                             description: |-
-                              On is the target of the grant (e.g. "mydb.*"). Defaults to the managed
-                              database.
+                              On is the target of the grant: the managed database ("mydb.*") or a
+                              table in it ("mydb.orders"), each name bare or backtick-quoted. Defaults
+                              to the managed database.
                             type: string
                           privileges:
-                            description: Privileges is the list of privileges (e.g.
-                              "SELECT", "INSERT", "ALL").
+                            description: |-
+                              Privileges is the list of privileges, one name per entry (e.g. "SELECT",
+                              "SHOW VIEW", "ALL"). Only schema-level privileges are allowed: SELECT,
+                              INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, REFERENCES, CREATE
+                              TEMPORARY TABLES, LOCK TABLES, EXECUTE, CREATE VIEW, SHOW VIEW, CREATE
+                              ROUTINE, ALTER ROUTINE, EVENT, TRIGGER and ALL. Global and dynamic
+                              privileges and GRANT OPTION need a DatabaseUser.
                             items:
                               type: string
                             type: array
@@ -151,8 +160,12 @@ spec:
                       description: Host the user connects from. Defaults to "%".
                       type: string
                     name:
-                      description: Name of the user.
+                      description: Name of the user. The names root, mysql.* and cnmsql_*
+                        are reserved.
                       type: string
+                      x-kubernetes-validations:
+                      - message: user name is reserved (root, mysql.*, cnmsql_*)
+                        rule: self != 'root' && !self.startsWith('mysql.') && !self.startsWith('cnmsql_')
                     passwordSecret:
                       description: PasswordSecret references the secret key holding
                         the user's password.
@@ -174,6 +187,10 @@ spec:
             required:
             - cluster
             type: object
+            x-kubernetes-validations:
+            - message: spec.name is immutable
+              rule: has(self.name) == has(oldSelf.name) && (!has(self.name) || self.name
+                == oldSelf.name)
           status:
             description: status defines the observed state of Database
             properties:
@@ -255,7 +272,10 @@ spec:
                 description: |-
                   PasswordStatus records, per managed user ("name@host"), the source Secret
                   resourceVersion last applied to MySQL. It lets the controller re-apply a
-                  password only when its Secret changes.
+                  password only when its Secret changes. Its keys are the accounts this
+                  Database owns: an inline user naming an existing account that is not a
+                  key is a conflict, and the account is left alone. A key is added, with an
+                  empty version, just before the account is created.
                 type: object
             type: object
         required:

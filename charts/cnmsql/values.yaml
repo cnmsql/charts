@@ -25,6 +25,13 @@ manager:
   ## Arguments passed to the controller manager binary.
   ## The chart automatically appends --operator-image matching manager.image.
   ##
+  ## Other flags you may add here:
+  ##   --object-store-ambient-credentials  let the operator use its own cloud
+  ##       identity (IRSA, workload identity) for object stores with no static
+  ##       credentials. Every Cluster author shares that identity.
+  ##   --extra-plugins=name[=library.so],...  server plugins that
+  ##       spec.mysql.plugins accepts on top of the built-in list.
+  ##
   args:
   - --leader-elect
   ## Image pull secrets
